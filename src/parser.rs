@@ -1,6 +1,7 @@
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashMap;
+use std::hash;
 use std::io::BufRead;
 use std::str::Split;
 use std::{
@@ -39,6 +40,7 @@ pub(crate) fn files_to_parse<P: AsRef<Path> + std::convert::AsRef<std::ffi::OsSt
 
     Ok(files)
 }
+#[derive(PartialEq, PartialOrd)]
 pub struct Identifier(String);
 pub enum CairoType {
     Felt252,
@@ -50,7 +52,25 @@ pub enum CairoType {
     U128,
     U256,
     LegacyMap(Box<CairoType>, Box<CairoType>),
-    Tuple(Vec<CairoType>),
+    //    Tuple(Vec<CairoType>),
+}
+
+impl ToString for CairoType {
+    fn to_string(&self) -> String {
+        match self {
+            Felt252 => String::from("String!"),
+            ContractAddress => String::from("String!"),
+            U8 => String::from("Int!"),
+            U16 => String::from("Int!"),
+            U32 => String::from("Int!"),
+            U64 => String::from("String!"),
+            U128 => String::from("String!"),
+            U256 => String::from("String!"),
+            LegacyMap(key, value) => {
+                format!("Map!({}, {})", key.to_string(), value.to_string())
+            }
+        }
+    }
 }
 
 pub struct CairoStorage {
@@ -59,14 +79,75 @@ pub struct CairoStorage {
 
 impl From<Vec<String>> for CairoStorage {
     fn from(value: Vec<String>) -> Self {
-        let fields: HashMap<Identifier, CairoType> = value
+        let fields_vec: Vec<(Identifier, CairoType)> = value
             .iter()
             .map(|v| v.trim().split(":").into_iter().take(2).collect())
+            .map(|v: Vec<&str>| {
+                let key = v[0].trim();
+                let value = v[1].trim();
+                let key = Identifier(key.to_string());
+                let value = CairoType::from(value.to_string());
+                (key, value)
+            })
             .collect();
-        println!("{:#?}", fields);
+        let mut fields = HashMap::new();
+        fields_vec.iter().for_each(|(k, v)| {
+            println!("{}: {}", &k.0, &v.to_string());
+            fields.insert(k, v);
+        });
         Self {
             fields: HashMap::new(),
         }
+    }
+}
+
+impl From<String> for CairoType {
+    fn from(value: String) -> Self {
+        let value = value.trim();
+        if value == "felt252" {
+            return CairoType::Felt252;
+        }
+
+        if value == "ContractAddress" {
+            return CairoType::ContractAddress;
+        }
+
+        if value == "u8" {
+            return CairoType::U8;
+        }
+
+        if value == "u16" {
+            return CairoType::U16;
+        }
+
+        if value == "u32" {
+            return CairoType::U32;
+        }
+
+        if value == "u64" {
+            return CairoType::U64;
+        }
+
+        if value == "u128" {
+            return CairoType::U128;
+        }
+
+        if value == "u256" {
+            return CairoType::U256;
+        }
+
+        if value.starts_with("LegacyMap") {
+            let mut value = value.split("LegacyMap");
+            let mut key = value.next().unwrap().trim();
+            let mut value = value.next().unwrap().trim();
+            key = key.trim_start_matches('<').trim_end_matches('>');
+            value = value.trim_start_matches('<').trim_end_matches('>');
+            return CairoType::LegacyMap(
+                Box::new(CairoType::from(key.to_string())),
+                Box::new(CairoType::from(value.to_string())),
+            );
+        }
+        panic!("Unknown type: {}", value);
     }
 }
 
@@ -246,7 +327,7 @@ impl ToString for &CairoArgument {
 
 impl From<String> for CairoEvent {
     fn from(value: String) -> Self {
-        let expr = Regex::new(r"(fn )(?<fn_name>[a-zA-z]+)\((?<args>.*)\)").unwrap();
+        let expr = Regex::new(r"(fn )(?<fn_name>[a-zA-Z]+)\((?<args>.*)\)").unwrap();
         let captures = expr.captures(&value).unwrap();
         let name = captures.name("fn_name").unwrap().as_str();
         let args = captures
