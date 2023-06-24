@@ -1,6 +1,8 @@
 use anyhow::Result;
 use regex::Regex;
+use std::collections::HashMap;
 use std::io::BufRead;
+use std::str::Split;
 use std::{
     fs::File,
     io,
@@ -37,16 +39,64 @@ pub(crate) fn files_to_parse<P: AsRef<Path> + std::convert::AsRef<std::ffi::OsSt
 
     Ok(files)
 }
+pub struct Identifier(String);
+pub enum CairoType {
+    Felt252,
+    ContractAddress,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    U256,
+    LegacyMap(Box<CairoType>, Box<CairoType>),
+    Tuple(Vec<CairoType>),
+}
+
+pub struct CairoStorage {
+    fields: HashMap<Identifier, CairoType>,
+}
+
+impl From<Vec<String>> for CairoStorage {
+    fn from(value: Vec<String>) -> Self {
+        let fields: HashMap<Identifier, CairoType> = value
+            .iter()
+            .map(|v| v.trim().split(":").into_iter().take(2).collect())
+            .collect();
+        println!("{:#?}", fields);
+        Self {
+            fields: HashMap::new(),
+        }
+    }
+}
 
 pub(crate) fn parse_cairo_file<P: AsRef<Path> + std::convert::AsRef<std::ffi::OsStr>>(
     file: P,
 ) -> Result<FileDomain> {
     let mut file_domain = FileDomain::new(&file);
+    let mut storage_buf: Vec<String> = Vec::new();
+    let mut storage: Option<CairoStorage> = None;
     if let Ok(mut lines) = read_lines(file) {
         let mut line_nr = 0;
         while let Some(line) = lines.next() {
             if let Ok(l) = line {
                 line_nr += 1;
+
+                if l.contains("struct Storage") {
+                    while storage.is_none() {
+                        if let Some(l) = lines.next() {
+                            if let Ok(l) = l {
+                                line_nr += 1;
+
+                                if l.contains('}') {
+                                    storage = Some(storage_buf.clone().into());
+                                }
+
+                                storage_buf.push(l.clone());
+                            }
+                        }
+                    }
+                }
 
                 let is_event_line = l.contains("#[event]");
                 if is_event_line {
@@ -243,4 +293,27 @@ fn is_cairo_file<P: AsRef<Path> + std::convert::AsRef<std::ffi::OsStr>>(file: P)
     }
 
     Err(ParserError::InvalidFileExtension.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CairoStorage;
+
+    #[test]
+    fn test_parse_cairo_type() {
+        let types = [
+            "        _name: felt252,".to_owned(),
+            "        _symbol: felt252,".to_owned(),
+            "        _initial_supply: u256,".to_owned(),
+            "        _total_supply: u256,".to_owned(),
+            "        _balances: LegacyMap<ContractAddress, u256>,".to_owned(),
+            "        _allowances: LegacyMap<(ContractAddress, ContractAddress), u256>,".to_owned(),
+            "        _reference: ContractAddress,".to_owned(),
+            "        _target: ContractAddress,".to_owned(),
+            "        _intrication: u64,".to_owned(),
+            "        _intrications: LegacyMap<ContractAddress, u64>,".to_owned(),
+        ];
+
+        let cairo_type: CairoStorage = types.to_vec().into();
+    }
 }
